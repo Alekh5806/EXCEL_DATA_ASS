@@ -75,3 +75,73 @@ class ExcelImporterTests(TestCase):
         self.assertEqual(row.product_gas_temperature, 80.5)
         self.assertEqual(row.stage, "HEAT UP")
         self.assertEqual(row.notes, "Sample note")
+
+
+class ProcessDataApiTests(TestCase):
+    def setUp(self):
+        ProcessData.objects.create(
+            timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, 10, 0)),
+            date=timezone.datetime(2025, 4, 8).date(),
+            time=timezone.datetime(2025, 4, 8, 10, 0).time(),
+            product_gas_temperature=80,
+            reactor_gas_temperature=50,
+            biomass_flow_rate=20,
+            stage="HEAT UP",
+            notes="First row",
+            source_file="sample.xlsx",
+        )
+        ProcessData.objects.create(
+            timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, 11, 0)),
+            date=timezone.datetime(2025, 4, 8).date(),
+            time=timezone.datetime(2025, 4, 8, 11, 0).time(),
+            product_gas_temperature=90,
+            reactor_gas_temperature=55,
+            biomass_flow_rate=30,
+            stage="RUNNING",
+            notes="Second row",
+            source_file="sample.xlsx",
+        )
+        ProcessData.objects.create(
+            timestamp=timezone.make_aware(timezone.datetime(2025, 4, 9, 10, 0)),
+            date=timezone.datetime(2025, 4, 9).date(),
+            time=timezone.datetime(2025, 4, 9, 10, 0).time(),
+            product_gas_temperature=70,
+            reactor_gas_temperature=45,
+            biomass_flow_rate=10,
+            stage="COOLING",
+            notes="Third row",
+            source_file="sample.xlsx",
+        )
+
+    def test_data_api_returns_rows_filtered_by_date(self):
+        response = self.client.get("/api/data/?date=2025-04-08")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 2)
+        self.assertEqual(len(response.json()["results"]), 2)
+
+    def test_summary_api_returns_summary_for_date(self):
+        response = self.client.get("/api/summary/?date=2025-04-08")
+
+        self.assertEqual(response.status_code, 200)
+        summary = response.json()["summary"]
+        self.assertEqual(summary["row_count"], 2)
+        self.assertEqual(summary["product_gas_temperature"]["maximum"], 90)
+        self.assertEqual(summary["product_gas_temperature"]["minimum"], 80)
+
+    def test_stats_api_returns_requested_operation(self):
+        response = self.client.get(
+            "/api/stats/?column=product_gas_temperature&operation=max&date=2025-04-08"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["value"], 90)
+
+    def test_stats_api_supports_column_alias(self):
+        response = self.client.get(
+            "/api/stats/?column=temperature&operation=average&date=2025-04-08"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["column"], "product_gas_temperature")
+        self.assertEqual(response.json()["value"], 85)
