@@ -6,4 +6,5 @@ __pycache__/
 db.sqlite3
 frontend/node_modules/
 frontend/dist/
+staticfiles/
 *.xlsx
