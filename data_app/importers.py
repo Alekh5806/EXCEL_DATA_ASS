@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 
+from django.db import transaction
 from django.utils import timezone
 from openpyxl import load_workbook
 
@@ -21,9 +22,17 @@ FIELD_MAP = {
     "COMMENTS 2\n(PROCESS NOTES)": "notes",
 }
 
+DEFAULT_BATCH_SIZE = 1000
 
-def import_excel_workbook(file_path, sheet_name=None):
+
+def import_excel_workbook(
+    file_path,
+    sheet_name=None,
+    source_file=None,
+    batch_size=DEFAULT_BATCH_SIZE,
+):
     workbook_path = Path(file_path)
+    display_source_file = source_file or workbook_path.name
     workbook = load_workbook(workbook_path, data_only=True, read_only=True)
     sheets = [workbook[sheet_name]] if sheet_name else workbook.worksheets
 
@@ -31,7 +40,7 @@ def import_excel_workbook(file_path, sheet_name=None):
     imported_sheets = []
 
     for worksheet in sheets:
-        created = import_worksheet(worksheet, workbook_path.name)
+        created = import_worksheet(worksheet, display_source_file, batch_size=batch_size)
         if created:
             imported_sheets.append(worksheet.title)
             total_created += created
@@ -39,13 +48,13 @@ def import_excel_workbook(file_path, sheet_name=None):
     workbook.close()
 
     return {
-        "source_file": workbook_path.name,
+        "source_file": display_source_file,
         "rows_created": total_created,
         "sheets_imported": imported_sheets,
     }
 
 
-def import_worksheet(worksheet, source_file):
+def import_worksheet(worksheet, source_file, batch_size=DEFAULT_BATCH_SIZE):
     header_row = find_header_row(worksheet)
     if header_row is None:
         return 0
@@ -56,31 +65,54 @@ def import_worksheet(worksheet, source_file):
     ]
     column_map = build_column_map(headers)
     data_start_row = header_row + 3
+    max_column = max(column_map.keys(), default=0) + 1
     objects = []
+    created_count = 0
 
-    for row in worksheet.iter_rows(min_row=data_start_row, values_only=True):
-        timestamp = parse_timestamp(row[0] if row else None)
-        if timestamp is None:
-            continue
+    with transaction.atomic():
+        for row in worksheet.iter_rows(
+            min_row=data_start_row,
+            max_col=max_column,
+            values_only=True,
+        ):
+            process_row = build_process_data_from_row(row, column_map, source_file)
+            if process_row is None:
+                continue
 
-        values = {
-            "timestamp": timestamp,
-            "date": timestamp.date(),
-            "time": timestamp.time(),
-            "source_file": source_file,
-        }
+            objects.append(process_row)
 
-        for index, field_name in column_map.items():
-            cell_value = row[index] if index < len(row) else None
-            if field_name in {"stage", "notes"}:
-                values[field_name] = parse_text(cell_value)
-            else:
-                values[field_name] = parse_float(cell_value)
+            if len(objects) >= batch_size:
+                ProcessData.objects.bulk_create(objects, batch_size=batch_size)
+                created_count += len(objects)
+                objects.clear()
 
-        objects.append(ProcessData(**values))
+        if objects:
+            ProcessData.objects.bulk_create(objects, batch_size=batch_size)
+            created_count += len(objects)
 
-    ProcessData.objects.bulk_create(objects, batch_size=1000)
-    return len(objects)
+    return created_count
+
+
+def build_process_data_from_row(row, column_map, source_file):
+    timestamp = parse_timestamp(row[0] if row else None)
+    if timestamp is None:
+        return None
+
+    values = {
+        "timestamp": timestamp,
+        "date": timestamp.date(),
+        "time": timestamp.time(),
+        "source_file": source_file,
+    }
+
+    for index, field_name in column_map.items():
+        cell_value = row[index] if index < len(row) else None
+        if field_name in {"stage", "notes"}:
+            values[field_name] = parse_text(cell_value)
+        else:
+            values[field_name] = parse_float(cell_value)
+
+    return ProcessData(**values)
 
 
 def find_header_row(worksheet):

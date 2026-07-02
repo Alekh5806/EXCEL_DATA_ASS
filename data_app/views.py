@@ -176,6 +176,7 @@ def chat(request):
 def upload_excel(request):
     excel_file = request.FILES.get("file")
     replace_source = str(request.data.get("replace_source", "")).lower() in {"1", "true", "yes", "on"}
+    source_file = Path(excel_file.name).name if excel_file else ""
 
     if excel_file is None:
         return Response(
@@ -190,18 +191,13 @@ def upload_excel(request):
         )
 
     if replace_source:
-        ProcessData.objects.filter(source_file=Path(excel_file.name).name).delete()
+        ProcessData.objects.filter(source_file=source_file).delete()
 
     with NamedTemporaryFile(suffix=".xlsx") as temporary_file:
         for chunk in excel_file.chunks():
             temporary_file.write(chunk)
         temporary_file.flush()
-        result = import_excel_workbook(temporary_file.name)
-
-    ProcessData.objects.filter(source_file=Path(temporary_file.name).name).update(
-        source_file=Path(excel_file.name).name
-    )
-    result["source_file"] = Path(excel_file.name).name
+        result = import_excel_workbook(temporary_file.name, source_file=source_file)
 
     return Response(
         {
