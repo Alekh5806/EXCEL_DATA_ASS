@@ -4,6 +4,7 @@ from datetime import date
 from django.db.models import Avg, Count, Max, Min
 from django.utils.dateparse import parse_date
 
+from .llm_sql import generate_sql_from_question
 from .models import ProcessData
 
 
@@ -66,6 +67,22 @@ def answer_chat_message(message):
     question = (message or "").strip()
     if not question:
         return clarification_response("Please ask a question about the process data.")
+
+    llm_result = generate_sql_from_question(question)
+    if llm_result["used_llm"]:
+        if llm_result["sql"]:
+            return {
+                "answer": "I generated a safe SELECT query. In Step 8, we will run this SQL and return database results.",
+                "sql": llm_result["sql"],
+                "data": [],
+                "explanation": llm_result["explanation"],
+            }
+        return {
+            "answer": llm_result["clarification_question"] or llm_result["explanation"],
+            "sql": "",
+            "data": [],
+            "explanation": llm_result["explanation"],
+        }
 
     lower_question = question.lower()
     selected_date = extract_date(lower_question)

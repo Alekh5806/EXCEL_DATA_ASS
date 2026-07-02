@@ -5,7 +5,9 @@ from django.utils import timezone
 from openpyxl import Workbook
 
 from .importers import import_excel_workbook
+from .llm_sql import build_sql_prompt
 from .models import ProcessData
+from .sql_security import ensure_limit, validate_select_sql
 
 
 class ProcessDataModelTests(TestCase):
@@ -175,3 +177,40 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(body["sql"], "")
         self.assertEqual(body["data"], [])
         self.assertIn("Please ask", body["answer"])
+
+
+class NaturalLanguageToSqlTests(TestCase):
+    def test_select_sql_for_allowed_table_is_valid(self):
+        sql = (
+            "SELECT MAX(product_gas_temperature) AS value "
+            "FROM data_app_processdata WHERE date = '2025-04-08';"
+        )
+
+        is_safe, message = validate_select_sql(sql)
+
+        self.assertTrue(is_safe)
+        self.assertEqual(message, "SQL is safe.")
+
+    def test_non_select_sql_is_blocked(self):
+        is_safe, message = validate_select_sql("DROP TABLE data_app_processdata;")
+
+        self.assertFalse(is_safe)
+        self.assertEqual(message, "Only SELECT queries are allowed.")
+
+    def test_sql_for_unknown_table_is_blocked(self):
+        is_safe, message = validate_select_sql("SELECT * FROM auth_user;")
+
+        self.assertFalse(is_safe)
+        self.assertEqual(message, "Query uses a table that is not allowed.")
+
+    def test_limit_is_added_when_missing(self):
+        sql = ensure_limit("SELECT id, date FROM data_app_processdata;")
+
+        self.assertEqual(sql, "SELECT id, date FROM data_app_processdata LIMIT 100;")
+
+    def test_prompt_contains_safety_rules(self):
+        prompt = build_sql_prompt("highest temperature on April 8")
+
+        self.assertIn("Only generate SELECT queries", prompt)
+        self.assertIn("data_app_processdata", prompt)
+        self.assertIn("product_gas_temperature", prompt)
