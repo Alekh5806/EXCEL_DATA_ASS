@@ -1,3 +1,6 @@
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+
 from django.db.models import Avg, Max, Min
 from django.utils.dateparse import parse_date
 from rest_framework import status
@@ -5,6 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .chatbot import answer_chat_message
+from .importers import import_excel_workbook
 from .models import ProcessData
 from .serializers import ProcessDataSerializer
 
@@ -166,6 +170,47 @@ def chat(request):
         )
 
     return Response(answer_chat_message(message))
+
+
+@api_view(["POST"])
+def upload_excel(request):
+    excel_file = request.FILES.get("file")
+    replace_source = str(request.data.get("replace_source", "")).lower() in {"1", "true", "yes", "on"}
+
+    if excel_file is None:
+        return Response(
+            {"error": "Please upload an Excel file using the 'file' field."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not excel_file.name.lower().endswith(".xlsx"):
+        return Response(
+            {"error": "Only .xlsx files are supported right now."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if replace_source:
+        ProcessData.objects.filter(source_file=Path(excel_file.name).name).delete()
+
+    with NamedTemporaryFile(suffix=".xlsx") as temporary_file:
+        for chunk in excel_file.chunks():
+            temporary_file.write(chunk)
+        temporary_file.flush()
+        result = import_excel_workbook(temporary_file.name)
+
+    ProcessData.objects.filter(source_file=Path(temporary_file.name).name).update(
+        source_file=Path(excel_file.name).name
+    )
+    result["source_file"] = Path(excel_file.name).name
+
+    return Response(
+        {
+            "message": f"Imported {result['rows_created']} rows from {result['source_file']}.",
+            **result,
+            "total_rows": ProcessData.objects.count(),
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 def normalize_column(column):

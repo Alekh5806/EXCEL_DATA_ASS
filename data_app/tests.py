@@ -1,6 +1,8 @@
+from io import BytesIO
 from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.utils import timezone
 from openpyxl import Workbook
@@ -200,6 +202,121 @@ class ProcessDataApiTests(TestCase):
                 {"time": "11:00", "product_gas_temperature": 90.0},
             ],
         )
+
+    def test_chat_api_returns_daily_summary(self):
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "Summarize April 8"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Summary for 2025-04-08", body["answer"])
+        self.assertEqual(len(body["data"]), 9)
+
+    def test_chat_api_compares_two_dates(self):
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "Compare temperature April 8 and April 9"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["chart"]["xKey"], "date")
+        self.assertEqual(body["chart"]["yKey"], "average")
+        self.assertEqual(body["data"][0]["date"], "2025-04-08")
+        self.assertEqual(body["data"][1]["date"], "2025-04-09")
+
+    def test_chat_api_detects_abnormal_values(self):
+        for index, value in enumerate([82, 85, 88, 84, 87], start=12):
+            ProcessData.objects.create(
+                timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, index, 0)),
+                date=timezone.datetime(2025, 4, 8).date(),
+                time=timezone.datetime(2025, 4, 8, index, 0).time(),
+                product_gas_temperature=value,
+                stage="RUNNING",
+                source_file="sample.xlsx",
+            )
+        ProcessData.objects.create(
+            timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, 18, 0)),
+            date=timezone.datetime(2025, 4, 8).date(),
+            time=timezone.datetime(2025, 4, 8, 18, 0).time(),
+            product_gas_temperature=500,
+            stage="RUNNING",
+            source_file="sample.xlsx",
+        )
+
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "Detect abnormal temperature on April 8"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("abnormal product gas temperature", body["answer"])
+        self.assertEqual(body["data"][0]["reason"], "above expected range")
+
+    def test_upload_excel_api_imports_uploaded_workbook(self):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Data"
+        worksheet.append([])
+        worksheet.append(
+            [
+                "Description ->",
+                "PYGAS FLOW RATE",
+                "BIOMASS FLOW RATE",
+                "BIOMASS TEMPERATURE",
+                "REACTOR GAS FLOW RATE",
+                "REACTOR GAS TEMPERATURE",
+                "HEAT CARRIER FLOW RATE",
+                "HEAT CARRIER TEMPERATURE",
+                "PRODUCT GAS TEMPERATURE",
+                "HEAT CARRIER RETURN TEMPERATURE",
+                "COMMENTS 1\n(STAGE)",
+                "COMMENTS 2\n(PROCESS NOTES)",
+            ]
+        )
+        worksheet.append(["Select Tags ->"])
+        worksheet.append(["Units ->"])
+        worksheet.append(
+            [
+                timezone.datetime(2025, 4, 10, 10, 0),
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                "TEST",
+                "Uploaded row",
+            ]
+        )
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+
+        upload = SimpleUploadedFile(
+            "uploaded.xlsx",
+            stream.read(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response = self.client.post(
+            "/api/upload/",
+            {"file": upload, "replace_source": "true"},
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(body["source_file"], "uploaded.xlsx")
+        self.assertEqual(body["rows_created"], 1)
+        self.assertTrue(ProcessData.objects.filter(source_file="uploaded.xlsx").exists())
 
     @patch("data_app.chatbot.generate_final_answer")
     @patch("data_app.chatbot.generate_sql_from_question")

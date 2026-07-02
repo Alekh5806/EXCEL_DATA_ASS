@@ -1,5 +1,6 @@
 import re
 from datetime import date
+from math import sqrt
 
 from django.db.models import Avg, Count, Max, Min
 from django.utils.dateparse import parse_date
@@ -101,9 +102,30 @@ def answer_chat_message(message):
 
     lower_question = question.lower()
     selected_date = extract_date(lower_question)
+    selected_dates = extract_dates(lower_question)
     wants_chart = extract_chart_request(lower_question)
+    wants_summary = extract_summary_request(lower_question)
+    wants_compare = extract_compare_request(lower_question)
+    wants_abnormal = extract_abnormal_request(lower_question)
     operation = extract_operation(lower_question)
     column = extract_column(lower_question)
+
+    if wants_compare:
+        if len(selected_dates) < 2:
+            return clarification_response("Please mention two dates to compare, such as April 8 and April 9.")
+        if column is None:
+            return clarification_response("Please mention what to compare, such as temperature or biomass flow rate.")
+        return build_compare_response(column, selected_dates[0], selected_dates[1])
+
+    if wants_summary:
+        if selected_date is None:
+            return clarification_response("Please mention the day to summarize, such as April 8.")
+        return build_summary_response(selected_date)
+
+    if wants_abnormal:
+        if column is None:
+            column = "product_gas_temperature"
+        return build_abnormal_response(column, selected_date)
 
     if wants_chart:
         if column is None:
@@ -135,6 +157,7 @@ def answer_chat_message(message):
             "answer": f"There are {value} rows{date_text}.",
             "sql": sql,
             "data": data,
+            "chart": None,
         }
 
     aggregate_name = "value"
@@ -155,6 +178,7 @@ def answer_chat_message(message):
         "answer": answer,
         "sql": sql,
         "data": data,
+        "chart": None,
     }
 
 
@@ -170,6 +194,151 @@ def clarification_response(answer):
 def extract_chart_request(question):
     chart_words = ["chart", "graph", "plot", "trend", "show"]
     return any(word in question for word in chart_words)
+
+
+def extract_summary_request(question):
+    return any(word in question for word in ["summary", "summarize", "summarise", "overview"])
+
+
+def extract_compare_request(question):
+    return any(word in question for word in ["compare", "comparison", "versus", " vs "])
+
+
+def extract_abnormal_request(question):
+    return any(word in question for word in ["abnormal", "outlier", "outliers", "unusual", "anomaly"])
+
+
+def build_summary_response(selected_date):
+    queryset = ProcessData.objects.filter(date=selected_date)
+    data = []
+
+    for column in COLUMN_KEYWORDS:
+        values = queryset.aggregate(
+            minimum=Min(column),
+            maximum=Max(column),
+            average=Avg(column),
+        )
+        data.append(
+            {
+                "measurement": column,
+                "minimum": values["minimum"],
+                "maximum": values["maximum"],
+                "average": round(values["average"], 4) if values["average"] is not None else None,
+            }
+        )
+
+    row_count = queryset.count()
+    return {
+        "answer": f"Summary for {selected_date.isoformat()}: {row_count} rows were found.",
+        "sql": f"SELECT MIN(...), MAX(...), AVG(...) FROM data_app_processdata WHERE date = '{selected_date.isoformat()}';",
+        "data": data,
+        "chart": None,
+    }
+
+
+def build_compare_response(column, first_date, second_date):
+    data = []
+    for selected_date in [first_date, second_date]:
+        queryset = ProcessData.objects.filter(date=selected_date)
+        values = queryset.aggregate(
+            minimum=Min(column),
+            maximum=Max(column),
+            average=Avg(column),
+            row_count=Count("id"),
+        )
+        data.append(
+            {
+                "date": selected_date.isoformat(),
+                "minimum": values["minimum"],
+                "maximum": values["maximum"],
+                "average": round(values["average"], 4) if values["average"] is not None else None,
+                "row_count": values["row_count"],
+            }
+        )
+
+    first_average = data[0]["average"]
+    second_average = data[1]["average"]
+    if first_average is None or second_average is None:
+        answer = f"I could not compare {humanize_column(column)} because one date is missing data."
+    else:
+        difference = round(second_average - first_average, 4)
+        direction = "higher" if difference > 0 else "lower" if difference < 0 else "the same"
+        answer = (
+            f"The average {humanize_column(column)} on {second_date.isoformat()} was "
+            f"{abs(difference)} {direction} than on {first_date.isoformat()}."
+        )
+
+    return {
+        "answer": answer,
+        "sql": (
+            f"SELECT date, MIN({column}), MAX({column}), AVG({column}), COUNT(*) "
+            f"FROM data_app_processdata WHERE date IN ('{first_date.isoformat()}', "
+            f"'{second_date.isoformat()}') GROUP BY date;"
+        ),
+        "data": data,
+        "chart": {
+            "type": "line",
+            "title": f"Average {humanize_column(column).title()} Comparison",
+            "xKey": "date",
+            "yKey": "average",
+            "data": data,
+        },
+    }
+
+
+def build_abnormal_response(column, selected_date):
+    queryset = ProcessData.objects.exclude(**{column: None}).order_by("timestamp")
+    if selected_date:
+        queryset = queryset.filter(date=selected_date)
+
+    rows = list(queryset.values("time", column))
+    values = [row[column] for row in rows]
+    if len(values) < 2:
+        return {
+            "answer": f"I could not detect abnormal {humanize_column(column)} values because there is not enough data.",
+            "sql": build_abnormal_sql(column, selected_date),
+            "data": [],
+            "chart": None,
+        }
+
+    average = sum(values) / len(values)
+    std_dev = sqrt(sum((value - average) ** 2 for value in values) / len(values))
+    high_limit = average + (2 * std_dev)
+    low_limit = average - (2 * std_dev)
+
+    abnormal_rows = []
+    for row in rows:
+        value = row[column]
+        if value > high_limit or value < low_limit:
+            abnormal_rows.append(
+                {
+                    "time": row["time"].strftime("%H:%M") if row["time"] else "",
+                    column: value,
+                    "reason": "above expected range" if value > high_limit else "below expected range",
+                }
+            )
+
+    data = abnormal_rows[:25]
+    date_text = format_date_text(selected_date)
+    answer = (
+        f"I found {len(abnormal_rows)} abnormal {humanize_column(column)} values{date_text}. "
+        f"The expected range is about {round(low_limit, 4)} to {round(high_limit, 4)}."
+    )
+
+    return {
+        "answer": answer,
+        "sql": build_abnormal_sql(column, selected_date),
+        "data": data,
+        "chart": {
+            "type": "line",
+            "title": f"Abnormal {humanize_column(column).title()} Values",
+            "xKey": "time",
+            "yKey": column,
+            "data": data,
+        }
+        if data
+        else None,
+    }
 
 
 def build_trend_response(column, selected_date):
@@ -225,26 +394,33 @@ def extract_column(question):
 
 
 def extract_date(question):
-    iso_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", question)
-    if iso_match:
-        return parse_date(iso_match.group(0))
+    dates = extract_dates(question)
+    return dates[0] if dates else None
 
-    month_match = re.search(
+
+def extract_dates(question):
+    dates = []
+    iso_match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", question)
+    for iso_match in re.finditer(r"\b\d{4}-\d{2}-\d{2}\b", question):
+        parsed = parse_date(iso_match.group(0))
+        if parsed:
+            dates.append(parsed)
+
+    month_pattern = (
         r"\b("
         + "|".join(MONTHS.keys())
-        + r")\s+(\d{1,2})(?:,\s*(\d{4}))?\b",
-        question,
+        + r")\s+(\d{1,2})(?:,\s*(\d{4}))?\b"
     )
-    if month_match:
+    for month_match in re.finditer(month_pattern, question):
         month = MONTHS[month_match.group(1)]
         day = int(month_match.group(2))
         year = int(month_match.group(3) or 2025)
         try:
-            return date(year, month, day)
+            dates.append(date(year, month, day))
         except ValueError:
-            return None
+            continue
 
-    return None
+    return dates
 
 
 def build_stat_sql(operation, column, selected_date):
@@ -267,6 +443,13 @@ def build_trend_sql(column, selected_date):
     if selected_date:
         sql += f" AND date = '{selected_date.isoformat()}'"
     return sql + " ORDER BY timestamp LIMIT 300;"
+
+
+def build_abnormal_sql(column, selected_date):
+    sql = f"SELECT time, {column} FROM data_app_processdata WHERE {column} IS NOT NULL"
+    if selected_date:
+        sql += f" AND date = '{selected_date.isoformat()}'"
+    return sql + " ORDER BY timestamp;"
 
 
 def humanize_column(column):

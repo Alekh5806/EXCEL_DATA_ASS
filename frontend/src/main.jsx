@@ -1,6 +1,17 @@
 import React, { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, ChevronDown, ChevronRight, Database, Loader2, Send, User } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Database,
+  Download,
+  FileUp,
+  Loader2,
+  RefreshCw,
+  Send,
+  User,
+} from "lucide-react";
 import {
   CartesianGrid,
   Line,
@@ -18,6 +29,7 @@ const starterMessages = [
     answer: "Ask a question about your imported Excel process data.",
     sql: "",
     data: [],
+    chart: null,
   },
 ];
 
@@ -26,6 +38,10 @@ function App() {
   const [input, setInput] = useState("What was the highest temperature on April 8?");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [replaceSource, setReplaceSource] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
 
   async function sendMessage(event) {
     event.preventDefault();
@@ -67,6 +83,47 @@ function App() {
     }
   }
 
+  async function uploadExcel(event) {
+    event.preventDefault();
+    if (!selectedFile || isUploading) return;
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    formData.append("replace_source", String(replaceSource));
+
+    setIsUploading(true);
+    setUploadStatus("");
+    setError("");
+
+    try {
+      const response = await fetch("/api/upload/", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || `Upload failed with status ${response.status}`);
+      }
+
+      setUploadStatus(data.message);
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          answer: `${data.message} Total rows in database: ${data.total_rows}.`,
+          sql: "",
+          data: [{ source_file: data.source_file, rows_created: data.rows_created }],
+          chart: null,
+        },
+      ]);
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="chat-workspace">
@@ -79,6 +136,31 @@ function App() {
             <p>Query imported process data with plain English.</p>
           </div>
         </header>
+
+        <form className="upload-panel" onSubmit={uploadExcel}>
+          <label className="file-picker">
+            <FileUp size={17} />
+            <span>{selectedFile ? selectedFile.name : "Choose Excel file"}</span>
+            <input
+              type="file"
+              accept=".xlsx"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+            />
+          </label>
+          <label className="replace-toggle">
+            <input
+              type="checkbox"
+              checked={replaceSource}
+              onChange={(event) => setReplaceSource(event.target.checked)}
+            />
+            <span>Re-import same file</span>
+          </label>
+          <button type="submit" disabled={!selectedFile || isUploading}>
+            {isUploading ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />}
+            <span>Import</span>
+          </button>
+          {uploadStatus && <span className="upload-status">{uploadStatus}</span>}
+        </form>
 
         <section className="messages" aria-live="polite">
           {messages.map((message, index) => (
@@ -114,7 +196,19 @@ function ChatMessage({ message }) {
         {isUser ? <User size={18} /> : <Bot size={18} />}
       </div>
       <div className="message-bubble">
-        <p>{message.answer}</p>
+        <div className="message-heading">
+          <p>{message.answer}</p>
+          {!isUser && (
+            <button
+              className="export-button"
+              type="button"
+              onClick={() => downloadReport(message)}
+              aria-label="Export answer report"
+            >
+              <Download size={16} />
+            </button>
+          )}
+        </div>
         {!isUser && <ResultDetails sql={message.sql} data={message.data} chart={message.chart} />}
       </div>
     </article>
@@ -231,6 +325,28 @@ function formatCell(value) {
   if (value === null || value === undefined) return "missing";
   if (typeof value === "number") return Number.isInteger(value) ? value : value.toFixed(4);
   return String(value);
+}
+
+function downloadReport(message) {
+  const report = [
+    "Excel Data Intelligence Chatbot Report",
+    "",
+    `Answer: ${message.answer || ""}`,
+    "",
+    message.sql ? `SQL:\n${message.sql}\n` : "",
+    message.data?.length ? `Data:\n${JSON.stringify(message.data, null, 2)}\n` : "",
+    message.chart ? `Chart:\n${JSON.stringify(message.chart, null, 2)}\n` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const blob = new Blob([report], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "excel-data-chatbot-report.txt";
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 createRoot(document.getElementById("root")).render(<App />);
