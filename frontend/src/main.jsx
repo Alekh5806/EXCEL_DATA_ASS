@@ -1,0 +1,197 @@
+import React, { useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { Bot, ChevronDown, ChevronRight, Database, Loader2, Send, User } from "lucide-react";
+import "./styles.css";
+
+const starterMessages = [
+  {
+    role: "assistant",
+    answer: "Ask a question about your imported Excel process data.",
+    sql: "",
+    data: [],
+  },
+];
+
+function App() {
+  const [messages, setMessages] = useState(starterMessages);
+  const [input, setInput] = useState("What was the highest temperature on April 8?");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function sendMessage(event) {
+    event.preventDefault();
+    const message = input.trim();
+    if (!message || isLoading) return;
+
+    setMessages((current) => [...current, { role: "user", answer: message }]);
+    setInput("");
+    setError("");
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/chat/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      setMessages((current) => [...current, { role: "assistant", ...data }]);
+    } catch (requestError) {
+      setError(requestError.message);
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          answer: "I could not reach the backend API. Check that Django is running on port 8000.",
+          sql: "",
+          data: [],
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  return (
+    <main className="app-shell">
+      <section className="chat-workspace">
+        <header className="topbar">
+          <div className="brand-mark" aria-hidden="true">
+            <Database size={22} />
+          </div>
+          <div>
+            <h1>Excel Data Intelligence Chatbot</h1>
+            <p>Query imported process data with plain English.</p>
+          </div>
+        </header>
+
+        <section className="messages" aria-live="polite">
+          {messages.map((message, index) => (
+            <ChatMessage key={`${message.role}-${index}`} message={message} />
+          ))}
+          {isLoading && <LoadingMessage />}
+        </section>
+
+        {error && <div className="error-banner">{error}</div>}
+
+        <form className="composer" onSubmit={sendMessage}>
+          <input
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="Ask about max, min, average, count, or a date..."
+            aria-label="Chat message"
+          />
+          <button type="submit" disabled={isLoading || !input.trim()} aria-label="Send message">
+            {isLoading ? <Loader2 className="spin" size={19} /> : <Send size={19} />}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function ChatMessage({ message }) {
+  const isUser = message.role === "user";
+
+  return (
+    <article className={`message-row ${isUser ? "user-row" : "assistant-row"}`}>
+      <div className="avatar" aria-hidden="true">
+        {isUser ? <User size={18} /> : <Bot size={18} />}
+      </div>
+      <div className="message-bubble">
+        <p>{message.answer}</p>
+        {!isUser && <ResultDetails sql={message.sql} data={message.data} />}
+      </div>
+    </article>
+  );
+}
+
+function ResultDetails({ sql, data }) {
+  const [showSql, setShowSql] = useState(false);
+  const [showData, setShowData] = useState(false);
+  const hasSql = Boolean(sql);
+  const hasData = Array.isArray(data) && data.length > 0;
+
+  if (!hasSql && !hasData) return null;
+
+  return (
+    <div className="result-details">
+      {hasSql && (
+        <Disclosure label="SQL" isOpen={showSql} onToggle={() => setShowSql((value) => !value)}>
+          <pre>{sql}</pre>
+        </Disclosure>
+      )}
+      {hasData && (
+        <Disclosure label="Result" isOpen={showData} onToggle={() => setShowData((value) => !value)}>
+          <ResultTable data={data} />
+        </Disclosure>
+      )}
+    </div>
+  );
+}
+
+function Disclosure({ label, isOpen, onToggle, children }) {
+  return (
+    <div className="disclosure">
+      <button type="button" onClick={onToggle}>
+        {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        <span>{label}</span>
+      </button>
+      {isOpen && <div className="disclosure-body">{children}</div>}
+    </div>
+  );
+}
+
+function ResultTable({ data }) {
+  const columns = useMemo(() => Object.keys(data[0] || {}), [data]);
+
+  return (
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th key={column}>{column}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {columns.map((column) => (
+                <td key={column}>{formatCell(row[column])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function LoadingMessage() {
+  return (
+    <article className="message-row assistant-row">
+      <div className="avatar" aria-hidden="true">
+        <Bot size={18} />
+      </div>
+      <div className="message-bubble loading">
+        <Loader2 className="spin" size={18} />
+        <span>Thinking</span>
+      </div>
+    </article>
+  );
+}
+
+function formatCell(value) {
+  if (value === null || value === undefined) return "missing";
+  if (typeof value === "number") return Number.isInteger(value) ? value : value.toFixed(4);
+  return String(value);
+}
+
+createRoot(document.getElementById("root")).render(<App />);
