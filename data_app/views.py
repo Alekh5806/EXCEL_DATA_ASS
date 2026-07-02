@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from .chatbot import answer_chat_message
 from .models import ProcessData
 from .serializers import ProcessDataSerializer
 
@@ -153,6 +154,18 @@ def data_stats(request):
             "row_count": queryset.count(),
         }
     )
+
+
+@api_view(["POST"])
+def chat(request):
+    message = request.data.get("message", "")
+    if not isinstance(message, str):
+        return Response(
+            {"error": "message must be a string."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return Response(answer_chat_message(message))
 
 
 def normalize_column(column):

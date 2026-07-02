@@ -145,3 +145,33 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["column"], "product_gas_temperature")
         self.assertEqual(response.json()["value"], 85)
+
+    def test_chat_api_answers_highest_temperature_question(self):
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "What was the highest temperature on April 8?"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["data"], [{"value": 90}])
+        self.assertIn("highest product gas temperature", body["answer"])
+        self.assertEqual(
+            body["sql"],
+            "SELECT MAX(product_gas_temperature) AS value FROM data_app_processdata "
+            "WHERE date = '2025-04-08';",
+        )
+
+    def test_chat_api_asks_for_clarification_when_question_is_unclear(self):
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "Tell me something interesting"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["sql"], "")
+        self.assertEqual(body["data"], [])
+        self.assertIn("Please ask", body["answer"])
