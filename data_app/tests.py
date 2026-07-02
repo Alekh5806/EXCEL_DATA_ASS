@@ -1,10 +1,12 @@
 from tempfile import NamedTemporaryFile
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
 from openpyxl import Workbook
 
 from .importers import import_excel_workbook
+from .llm_answer import build_answer_prompt, build_fallback_answer
 from .llm_sql import build_sql_prompt
 from .models import ProcessData
 from .sql_runner import run_safe_select_sql
@@ -179,6 +181,34 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(body["data"], [])
         self.assertIn("Please ask", body["answer"])
 
+    @patch("data_app.chatbot.generate_final_answer")
+    @patch("data_app.chatbot.generate_sql_from_question")
+    def test_chat_api_runs_llm_sql_and_generates_final_answer(
+        self, mock_generate_sql, mock_generate_final_answer
+    ):
+        mock_generate_sql.return_value = {
+            "sql": (
+                "SELECT MAX(product_gas_temperature) AS value "
+                "FROM data_app_processdata WHERE date = '2025-04-08';"
+            ),
+            "explanation": "Gets the highest product gas temperature for April 8.",
+            "clarification_question": "",
+            "used_llm": True,
+        }
+        mock_generate_final_answer.return_value = "The highest temperature was 90."
+
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "What was the highest temperature on April 8?"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["answer"], "The highest temperature was 90.")
+        self.assertEqual(body["data"], [{"value": 90.0}])
+        mock_generate_final_answer.assert_called_once()
+
 
 class NaturalLanguageToSqlTests(TestCase):
     def test_select_sql_for_allowed_table_is_valid(self):
@@ -262,3 +292,27 @@ class SafeSqlRunnerTests(TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["sql"].endswith(" LIMIT 100;"))
         self.assertEqual(len(result["data"]), 2)
+
+
+class FinalAnswerTests(TestCase):
+    def test_fallback_answer_for_single_value_result(self):
+        answer = build_fallback_answer([{"value": 90.123456}])
+
+        self.assertEqual(answer, "The result is 90.1235.")
+
+    def test_fallback_answer_mentions_missing_data(self):
+        answer = build_fallback_answer([])
+
+        self.assertEqual(answer, "I ran the query, but no matching data was found.")
+
+    def test_answer_prompt_forbids_hallucination(self):
+        prompt = build_answer_prompt(
+            "What was the highest temperature on April 8?",
+            "SELECT MAX(product_gas_temperature) AS value FROM data_app_processdata;",
+            [{"value": 90}],
+            "Gets the highest temperature.",
+        )
+
+        self.assertIn("Answer only from the SQL result", prompt)
+        self.assertIn("Do not invent", prompt)
+        self.assertIn('"value": 90', prompt)

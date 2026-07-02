@@ -4,6 +4,7 @@ from datetime import date
 from django.db.models import Avg, Count, Max, Min
 from django.utils.dateparse import parse_date
 
+from .llm_answer import generate_final_answer
 from .llm_sql import generate_sql_from_question
 from .models import ProcessData
 from .sql_runner import run_safe_select_sql
@@ -81,7 +82,12 @@ def answer_chat_message(message):
                     "explanation": llm_result["explanation"],
                 }
             return {
-                "answer": build_basic_sql_answer(sql_result["data"]),
+                "answer": generate_final_answer(
+                    question,
+                    sql_result["sql"],
+                    sql_result["data"],
+                    llm_result["explanation"],
+                ),
                 "sql": sql_result["sql"],
                 "data": sql_result["data"],
                 "explanation": llm_result["explanation"],
@@ -150,21 +156,6 @@ def clarification_response(answer):
         "sql": "",
         "data": [],
     }
-
-
-def build_basic_sql_answer(data):
-    if not data:
-        return "I ran the query, but no matching data was found."
-
-    if len(data) == 1:
-        first_row = data[0]
-        if len(first_row) == 1:
-            column, value = next(iter(first_row.items()))
-            if value is None:
-                return f"I ran the query, but {column} was missing in the matching data."
-            return f"The result is {value}."
-
-    return f"I found {len(data)} matching rows."
 
 
 def extract_operation(question):
