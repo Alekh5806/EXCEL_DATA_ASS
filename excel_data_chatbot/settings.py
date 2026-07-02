@@ -159,7 +159,8 @@ STORAGES = {
 }
 
 DEFAULT_FRONTEND_ORIGINS = {
-    "https://excel-data-ass.patelalekh3456.workers.dev",
+    "https://excel-data-ass.pages.dev",
+    "https://c635e72b.excel-data-ass.pages.dev",
 }
 
 CORS_ALLOWED_ORIGINS = sorted(
