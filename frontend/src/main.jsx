@@ -23,6 +23,8 @@ import {
 } from "recharts";
 import "./styles.css";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+
 const starterMessages = [
   {
     role: "assistant",
@@ -54,7 +56,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await fetch("/api/chat/", {
+      const response = await fetch(`${API_BASE_URL}/api/chat/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
@@ -72,7 +74,7 @@ function App() {
         ...current,
         {
           role: "assistant",
-          answer: "I could not reach the backend API. Check that Django is running on port 8000.",
+          answer: "I could not reach the backend API. Check that Django is running and the API URL is correct.",
           sql: "",
           data: [],
           chart: null,
@@ -96,7 +98,7 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch("/api/upload/", {
+      const response = await fetch(`${API_BASE_URL}/api/upload/`, {
         method: "POST",
         body: formData,
       });
