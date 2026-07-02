@@ -33,7 +33,10 @@ DEBUG = os.environ.get("DEBUG", "True").lower() in {"1", "true", "yes", "on"}
 
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.environ.get("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+    for host in os.environ.get(
+        "ALLOWED_HOSTS",
+        "127.0.0.1,localhost,excel-data-ass.onrender.com",
+    ).split(",")
     if host.strip()
 ]
 
@@ -149,13 +152,19 @@ STORAGES = {
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+    for origin in os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "https://excel-data-ass.patelalekh3456.workers.dev",
+    ).split(",")
     if origin.strip()
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
-    for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",")
+    for origin in os.environ.get(
+        "CSRF_TRUSTED_ORIGINS",
+        "https://excel-data-ass.patelalekh3456.workers.dev",
+    ).split(",")
     if origin.strip()
 ]
 
