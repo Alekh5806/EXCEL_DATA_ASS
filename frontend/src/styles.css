@@ -128,6 +128,26 @@ input {
   gap: 8px;
 }
 
+.chart-panel {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #e2e8e3;
+  background: #fbfcfb;
+}
+
+.chart-title {
+  color: #405149;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.chart-frame {
+  width: 100%;
+  height: 260px;
+  min-width: 0;
+}
+
 .disclosure > button {
   display: inline-flex;
   align-items: center;

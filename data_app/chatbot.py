@@ -101,12 +101,20 @@ def answer_chat_message(message):
 
     lower_question = question.lower()
     selected_date = extract_date(lower_question)
+    wants_chart = extract_chart_request(lower_question)
     operation = extract_operation(lower_question)
     column = extract_column(lower_question)
 
+    if wants_chart:
+        if column is None:
+            return clarification_response(
+                "Please mention what to chart, such as product gas temperature or biomass flow rate."
+            )
+        return build_trend_response(column, selected_date)
+
     if operation is None:
         return clarification_response(
-            "Please ask for a max, min, average, or count. For example: What was the highest temperature on April 8?"
+            "Please ask for a max, min, average, count, or trend. For example: Show temperature trend on April 8."
         )
 
     if operation != "count" and column is None:
@@ -155,6 +163,50 @@ def clarification_response(answer):
         "answer": answer,
         "sql": "",
         "data": [],
+        "chart": None,
+    }
+
+
+def extract_chart_request(question):
+    chart_words = ["chart", "graph", "plot", "trend", "show"]
+    return any(word in question for word in chart_words)
+
+
+def build_trend_response(column, selected_date):
+    queryset = ProcessData.objects.exclude(**{column: None}).order_by("timestamp")
+    if selected_date:
+        queryset = queryset.filter(date=selected_date)
+
+    rows = list(queryset.values("time", column)[:300])
+    data = [
+        {
+            "time": row["time"].strftime("%H:%M") if row["time"] else "",
+            column: row[column],
+        }
+        for row in rows
+    ]
+    sql = build_trend_sql(column, selected_date)
+    date_text = format_date_text(selected_date)
+
+    if not data:
+        answer = f"I could not find chart data for {humanize_column(column)}{date_text}."
+    else:
+        answer = (
+            f"Here is the {humanize_column(column)} trend{date_text}. "
+            f"I returned {len(data)} chart points."
+        )
+
+    return {
+        "answer": answer,
+        "sql": sql,
+        "data": data,
+        "chart": {
+            "type": "line",
+            "title": f"{humanize_column(column).title()} Trend",
+            "xKey": "time",
+            "yKey": column,
+            "data": data,
+        },
     }
 
 
@@ -208,6 +260,13 @@ def build_count_sql(selected_date):
     if selected_date:
         sql += f" WHERE date = '{selected_date.isoformat()}'"
     return sql + ";"
+
+
+def build_trend_sql(column, selected_date):
+    sql = f"SELECT time, {column} FROM data_app_processdata WHERE {column} IS NOT NULL"
+    if selected_date:
+        sql += f" AND date = '{selected_date.isoformat()}'"
+    return sql + " ORDER BY timestamp LIMIT 300;"
 
 
 def humanize_column(column):

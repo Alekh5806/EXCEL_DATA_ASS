@@ -181,6 +181,26 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(body["data"], [])
         self.assertIn("Please ask", body["answer"])
 
+    def test_chat_api_returns_chart_data_for_trend_question(self):
+        response = self.client.post(
+            "/api/chat/",
+            {"message": "Show temperature trend on April 8"},
+            content_type="application/json",
+        )
+
+        body = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body["chart"]["type"], "line")
+        self.assertEqual(body["chart"]["xKey"], "time")
+        self.assertEqual(body["chart"]["yKey"], "product_gas_temperature")
+        self.assertEqual(
+            body["data"],
+            [
+                {"time": "10:00", "product_gas_temperature": 80.0},
+                {"time": "11:00", "product_gas_temperature": 90.0},
+            ],
+        )
+
     @patch("data_app.chatbot.generate_final_answer")
     @patch("data_app.chatbot.generate_sql_from_question")
     def test_chat_api_runs_llm_sql_and_generates_final_answer(

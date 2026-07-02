@@ -1,6 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Bot, ChevronDown, ChevronRight, Database, Loader2, Send, User } from "lucide-react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import "./styles.css";
 
 const starterMessages = [
@@ -50,6 +59,7 @@ function App() {
           answer: "I could not reach the backend API. Check that Django is running on port 8000.",
           sql: "",
           data: [],
+          chart: null,
         },
       ]);
     } finally {
@@ -105,22 +115,24 @@ function ChatMessage({ message }) {
       </div>
       <div className="message-bubble">
         <p>{message.answer}</p>
-        {!isUser && <ResultDetails sql={message.sql} data={message.data} />}
+        {!isUser && <ResultDetails sql={message.sql} data={message.data} chart={message.chart} />}
       </div>
     </article>
   );
 }
 
-function ResultDetails({ sql, data }) {
+function ResultDetails({ sql, data, chart }) {
   const [showSql, setShowSql] = useState(false);
   const [showData, setShowData] = useState(false);
   const hasSql = Boolean(sql);
   const hasData = Array.isArray(data) && data.length > 0;
+  const hasChart = Boolean(chart?.data?.length);
 
-  if (!hasSql && !hasData) return null;
+  if (!hasSql && !hasData && !hasChart) return null;
 
   return (
     <div className="result-details">
+      {hasChart && <TrendChart chart={chart} />}
       {hasSql && (
         <Disclosure label="SQL" isOpen={showSql} onToggle={() => setShowSql((value) => !value)}>
           <pre>{sql}</pre>
@@ -131,6 +143,33 @@ function ResultDetails({ sql, data }) {
           <ResultTable data={data} />
         </Disclosure>
       )}
+    </div>
+  );
+}
+
+function TrendChart({ chart }) {
+  return (
+    <div className="chart-panel">
+      <div className="chart-title">{chart.title}</div>
+      <div className="chart-frame">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chart.data} margin={{ top: 10, right: 18, bottom: 4, left: 0 }}>
+            <CartesianGrid stroke="#e2e8e3" strokeDasharray="3 3" />
+            <XAxis dataKey={chart.xKey} tick={{ fontSize: 12 }} minTickGap={22} />
+            <YAxis tick={{ fontSize: 12 }} width={54} />
+            <Tooltip formatter={(value) => formatCell(value)} labelFormatter={(label) => `Time: ${label}`} />
+            <Line
+              type="monotone"
+              dataKey={chart.yKey}
+              stroke="#2d5c70"
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
