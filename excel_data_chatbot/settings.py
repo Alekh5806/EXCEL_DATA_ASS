@@ -29,16 +29,24 @@ SECRET_KEY = os.environ.get(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DEBUG", "True").lower() in {"1", "true", "yes", "on"}
+DEBUG = os.environ.get("DEBUG", "False").lower() in {"1", "true", "yes", "on"}
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.environ.get(
-        "ALLOWED_HOSTS",
-        "127.0.0.1,localhost,excel-data-ass.onrender.com",
-    ).split(",")
-    if host.strip()
-]
+DEFAULT_ALLOWED_HOSTS = {
+    "127.0.0.1",
+    "localhost",
+    "excel-data-ass.onrender.com",
+}
+if os.environ.get("RENDER_EXTERNAL_HOSTNAME"):
+    DEFAULT_ALLOWED_HOSTS.add(os.environ["RENDER_EXTERNAL_HOSTNAME"])
+
+ALLOWED_HOSTS = sorted(
+    DEFAULT_ALLOWED_HOSTS
+    | {
+        host.strip()
+        for host in os.environ.get("ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    }
+)
 
 
 # Application definition
@@ -150,23 +158,27 @@ STORAGES = {
     },
 }
 
-CORS_ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get(
-        "CORS_ALLOWED_ORIGINS",
-        "https://excel-data-ass.patelalekh3456.workers.dev",
-    ).split(",")
-    if origin.strip()
-]
+DEFAULT_FRONTEND_ORIGINS = {
+    "https://excel-data-ass.patelalekh3456.workers.dev",
+}
 
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get(
-        "CSRF_TRUSTED_ORIGINS",
-        "https://excel-data-ass.patelalekh3456.workers.dev",
-    ).split(",")
-    if origin.strip()
-]
+CORS_ALLOWED_ORIGINS = sorted(
+    DEFAULT_FRONTEND_ORIGINS
+    | {
+        origin.strip()
+        for origin in os.environ.get("CORS_ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    }
+)
+
+CSRF_TRUSTED_ORIGINS = sorted(
+    DEFAULT_FRONTEND_ORIGINS
+    | {
+        origin.strip()
+        for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",")
+        if origin.strip()
+    }
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
