@@ -6,6 +6,7 @@ from django.utils.dateparse import parse_date
 
 from .llm_sql import generate_sql_from_question
 from .models import ProcessData
+from .sql_runner import run_safe_select_sql
 
 
 MONTHS = {
@@ -71,10 +72,18 @@ def answer_chat_message(message):
     llm_result = generate_sql_from_question(question)
     if llm_result["used_llm"]:
         if llm_result["sql"]:
+            sql_result = run_safe_select_sql(llm_result["sql"])
+            if not sql_result["ok"]:
+                return {
+                    "answer": f"I could not run the generated SQL because it was not safe: {sql_result['error']}",
+                    "sql": sql_result["sql"],
+                    "data": [],
+                    "explanation": llm_result["explanation"],
+                }
             return {
-                "answer": "I generated a safe SELECT query. In Step 8, we will run this SQL and return database results.",
-                "sql": llm_result["sql"],
-                "data": [],
+                "answer": build_basic_sql_answer(sql_result["data"]),
+                "sql": sql_result["sql"],
+                "data": sql_result["data"],
                 "explanation": llm_result["explanation"],
             }
         return {
@@ -141,6 +150,21 @@ def clarification_response(answer):
         "sql": "",
         "data": [],
     }
+
+
+def build_basic_sql_answer(data):
+    if not data:
+        return "I ran the query, but no matching data was found."
+
+    if len(data) == 1:
+        first_row = data[0]
+        if len(first_row) == 1:
+            column, value = next(iter(first_row.items()))
+            if value is None:
+                return f"I ran the query, but {column} was missing in the matching data."
+            return f"The result is {value}."
+
+    return f"I found {len(data)} matching rows."
 
 
 def extract_operation(question):

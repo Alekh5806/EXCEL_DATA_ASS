@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from .importers import import_excel_workbook
 from .llm_sql import build_sql_prompt
 from .models import ProcessData
+from .sql_runner import run_safe_select_sql
 from .sql_security import ensure_limit, validate_select_sql
 
 
@@ -214,3 +215,50 @@ class NaturalLanguageToSqlTests(TestCase):
         self.assertIn("Only generate SELECT queries", prompt)
         self.assertIn("data_app_processdata", prompt)
         self.assertIn("product_gas_temperature", prompt)
+
+
+class SafeSqlRunnerTests(TestCase):
+    def setUp(self):
+        ProcessData.objects.create(
+            timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, 10, 0)),
+            date=timezone.datetime(2025, 4, 8).date(),
+            time=timezone.datetime(2025, 4, 8, 10, 0).time(),
+            product_gas_temperature=80,
+            stage="HEAT UP",
+            source_file="sample.xlsx",
+        )
+        ProcessData.objects.create(
+            timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, 11, 0)),
+            date=timezone.datetime(2025, 4, 8).date(),
+            time=timezone.datetime(2025, 4, 8, 11, 0).time(),
+            product_gas_temperature=90,
+            stage="RUNNING",
+            source_file="sample.xlsx",
+        )
+
+    def test_safe_sql_runner_executes_valid_select(self):
+        result = run_safe_select_sql(
+            "SELECT MAX(product_gas_temperature) AS value "
+            "FROM data_app_processdata WHERE date = '2025-04-08';"
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"], [{"value": 90.0}])
+        self.assertEqual(result["columns"], ["value"])
+
+    def test_safe_sql_runner_blocks_unsafe_sql(self):
+        result = run_safe_select_sql("DELETE FROM data_app_processdata;")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["data"], [])
+        self.assertEqual(result["sql"], "DELETE FROM data_app_processdata;")
+        self.assertIn("Only SELECT queries are allowed", result["error"])
+
+    def test_safe_sql_runner_adds_limit_to_row_queries(self):
+        result = run_safe_select_sql(
+            "SELECT id, product_gas_temperature FROM data_app_processdata;"
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["sql"].endswith(" LIMIT 100;"))
+        self.assertEqual(len(result["data"]), 2)
