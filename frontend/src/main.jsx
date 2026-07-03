@@ -23,7 +23,7 @@ import {
 } from "recharts";
 import "./styles.css";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://excel-data-ass.onrender.com";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 const starterMessages = [
   {

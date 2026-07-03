@@ -71,7 +71,8 @@ class ExcelImporterTests(TestCase):
             ]
         )
 
-        temporary_file = NamedTemporaryFile(suffix=".xlsx")
+        temporary_file = NamedTemporaryFile(suffix=".xlsx", delete=False)
+        temporary_file.close()
         workbook.save(temporary_file.name)
 
         result = import_excel_workbook(temporary_file.name)
@@ -153,7 +154,18 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(response.json()["column"], "product_gas_temperature")
         self.assertEqual(response.json()["value"], 85)
 
-    def test_chat_api_answers_highest_temperature_question(self):
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_answers_highest_temperature_question(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "The highest product gas temperature was 90.",
+            "sql": (
+                "SELECT MAX(product_gas_temperature) AS value "
+                "FROM data_app_processdata WHERE date = '2025-04-08';"
+            ),
+            "data": [{"value": 90}],
+            "chart": None,
+        }
+
         response = self.client.post(
             "/api/chat/",
             {"message": "What was the highest temperature on April 8?"},
@@ -170,7 +182,15 @@ class ProcessDataApiTests(TestCase):
             "WHERE date = '2025-04-08';",
         )
 
-    def test_chat_api_asks_for_clarification_when_question_is_unclear(self):
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_asks_for_clarification_when_question_is_unclear(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "Please ask a question about the process data.",
+            "sql": "",
+            "data": [],
+            "chart": None,
+        }
+
         response = self.client.post(
             "/api/chat/",
             {"message": "Tell me something interesting"},
@@ -183,7 +203,31 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(body["data"], [])
         self.assertIn("Please ask", body["answer"])
 
-    def test_chat_api_returns_chart_data_for_trend_question(self):
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_returns_chart_data_for_trend_question(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "Here is the temperature trend.",
+            "sql": (
+                "SELECT time, product_gas_temperature FROM data_app_processdata "
+                "WHERE product_gas_temperature IS NOT NULL AND date = '2025-04-08' "
+                "ORDER BY timestamp LIMIT 300;"
+            ),
+            "data": [
+                {"time": "10:00", "product_gas_temperature": 80.0},
+                {"time": "11:00", "product_gas_temperature": 90.0},
+            ],
+            "chart": {
+                "type": "line",
+                "title": "Product Gas Temperature Trend",
+                "xKey": "time",
+                "yKey": "product_gas_temperature",
+                "data": [
+                    {"time": "10:00", "product_gas_temperature": 80.0},
+                    {"time": "11:00", "product_gas_temperature": 90.0},
+                ],
+            },
+        }
+
         response = self.client.post(
             "/api/chat/",
             {"message": "Show temperature trend on April 8"},
@@ -203,7 +247,25 @@ class ProcessDataApiTests(TestCase):
             ],
         )
 
-    def test_chat_api_returns_daily_summary(self):
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_returns_daily_summary(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "Summary for 2025-04-08: 2 rows were found.",
+            "sql": "SELECT * FROM data_app_processdata WHERE date = '2025-04-08';",
+            "data": [
+                {"measurement": "pygas_flow_rate"},
+                {"measurement": "biomass_flow_rate"},
+                {"measurement": "biomass_temperature"},
+                {"measurement": "reactor_gas_flow_rate"},
+                {"measurement": "reactor_gas_temperature"},
+                {"measurement": "heat_carrier_flow_rate"},
+                {"measurement": "heat_carrier_temperature"},
+                {"measurement": "product_gas_temperature"},
+                {"measurement": "heat_carrier_return_temperature"},
+            ],
+            "chart": None,
+        }
+
         response = self.client.post(
             "/api/chat/",
             {"message": "Summarize April 8"},
@@ -215,7 +277,55 @@ class ProcessDataApiTests(TestCase):
         self.assertIn("Summary for 2025-04-08", body["answer"])
         self.assertEqual(len(body["data"]), 9)
 
-    def test_chat_api_compares_two_dates(self):
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_compares_two_dates(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "The average temperature on 2025-04-09 was higher than on 2025-04-08.",
+            "sql": (
+                "SELECT date, MIN(product_gas_temperature), MAX(product_gas_temperature), "
+                "AVG(product_gas_temperature), COUNT(*) FROM data_app_processdata "
+                "WHERE date IN ('2025-04-08', '2025-04-09') GROUP BY date;"
+            ),
+            "data": [
+                {
+                    "date": "2025-04-08",
+                    "minimum": 80,
+                    "maximum": 90,
+                    "average": 85.0,
+                    "row_count": 2,
+                },
+                {
+                    "date": "2025-04-09",
+                    "minimum": 70,
+                    "maximum": 70,
+                    "average": 70.0,
+                    "row_count": 1,
+                },
+            ],
+            "chart": {
+                "type": "line",
+                "title": "Average Product Gas Temperature Comparison",
+                "xKey": "date",
+                "yKey": "average",
+                "data": [
+                    {
+                        "date": "2025-04-08",
+                        "minimum": 80,
+                        "maximum": 90,
+                        "average": 85.0,
+                        "row_count": 2,
+                    },
+                    {
+                        "date": "2025-04-09",
+                        "minimum": 70,
+                        "maximum": 70,
+                        "average": 70.0,
+                        "row_count": 1,
+                    },
+                ],
+            },
+        }
+
         response = self.client.post(
             "/api/chat/",
             {"message": "Compare temperature April 8 and April 9"},
@@ -229,7 +339,24 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(body["data"][0]["date"], "2025-04-08")
         self.assertEqual(body["data"][1]["date"], "2025-04-09")
 
-    def test_chat_api_detects_abnormal_values(self):
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_detects_abnormal_values(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "I found 1 abnormal product gas temperature value on 2025-04-08.",
+            "sql": (
+                "SELECT time, product_gas_temperature FROM data_app_processdata "
+                "WHERE product_gas_temperature IS NOT NULL AND date = '2025-04-08' ORDER BY timestamp;"
+            ),
+            "data": [{"time": "18:00", "product_gas_temperature": 500, "reason": "above expected range"}],
+            "chart": {
+                "type": "line",
+                "title": "Abnormal Product Gas Temperature Values",
+                "xKey": "time",
+                "yKey": "product_gas_temperature",
+                "data": [{"time": "18:00", "product_gas_temperature": 500, "reason": "above expected range"}],
+            },
+        }
+
         for index, value in enumerate([82, 85, 88, 84, 87], start=12):
             ProcessData.objects.create(
                 timestamp=timezone.make_aware(timezone.datetime(2025, 4, 8, index, 0)),
@@ -318,21 +445,17 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(body["rows_created"], 1)
         self.assertTrue(ProcessData.objects.filter(source_file="uploaded.xlsx").exists())
 
-    @patch("data_app.chatbot.generate_final_answer")
-    @patch("data_app.chatbot.generate_sql_from_question")
-    def test_chat_api_runs_llm_sql_and_generates_final_answer(
-        self, mock_generate_sql, mock_generate_final_answer
-    ):
-        mock_generate_sql.return_value = {
+    @patch("data_app.chatbot.run_langgraph_chat")
+    def test_chat_api_runs_langgraph_pipeline(self, mock_run_langgraph_chat):
+        mock_run_langgraph_chat.return_value = {
+            "answer": "The highest temperature was 90.",
             "sql": (
                 "SELECT MAX(product_gas_temperature) AS value "
                 "FROM data_app_processdata WHERE date = '2025-04-08';"
             ),
-            "explanation": "Gets the highest product gas temperature for April 8.",
-            "clarification_question": "",
-            "used_llm": True,
+            "data": [{"value": 90.0}],
+            "chart": None,
         }
-        mock_generate_final_answer.return_value = "The highest temperature was 90."
 
         response = self.client.post(
             "/api/chat/",
@@ -344,7 +467,7 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(body["answer"], "The highest temperature was 90.")
         self.assertEqual(body["data"], [{"value": 90.0}])
-        mock_generate_final_answer.assert_called_once()
+        mock_run_langgraph_chat.assert_called_once_with("What was the highest temperature on April 8?")
 
 
 class NaturalLanguageToSqlTests(TestCase):
@@ -382,6 +505,8 @@ class NaturalLanguageToSqlTests(TestCase):
         self.assertIn("Only generate SELECT queries", prompt)
         self.assertIn("data_app_processdata", prompt)
         self.assertIn("product_gas_temperature", prompt)
+        self.assertIn("One row represents a process measurement captured at a specific timestamp.", prompt)
+        self.assertIn("Question mapping hints", prompt)
 
 
 class SafeSqlRunnerTests(TestCase):

@@ -19,6 +19,25 @@ import dj_database_url
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def load_env_file(env_path):
+    if not env_path.exists():
+        return
+
+    with env_path.open("r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = value.strip().strip('"').strip("'")
+
+
+load_env_file(BASE_DIR / ".env")
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -159,6 +178,8 @@ STORAGES = {
 }
 
 DEFAULT_FRONTEND_ORIGINS = {
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
     "https://excel-data-ass.pages.dev",
     "https://c635e72b.excel-data-ass.pages.dev",
 }

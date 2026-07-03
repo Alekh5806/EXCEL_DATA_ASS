@@ -3,6 +3,7 @@ import os
 
 from openai import OpenAI
 
+from .semantic_layer import build_semantic_layer_prompt
 from .sql_security import ALLOWED_COLUMNS, ALLOWED_TABLES, ensure_limit, validate_select_sql
 
 
@@ -36,58 +37,70 @@ def generate_sql_from_question(question):
             "used_llm": False,
         }
 
-    client = OpenAI()
-    model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
-    prompt = build_sql_prompt(question)
+    try:
+        client = OpenAI()
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        prompt = build_sql_prompt(question)
 
-    response = client.responses.create(
-        model=model,
-        input=[
-            {
-                "role": "developer",
-                "content": "You convert user questions about process data into safe SQLite SELECT queries.",
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "developer",
+                    "content": "You convert user questions about process data into safe SQLite SELECT queries.",
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "sql_generation_response",
+                    "strict": True,
+                    "schema": SQL_RESPONSE_SCHEMA,
+                }
             },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "sql_generation_response",
-                "strict": True,
-                "schema": SQL_RESPONSE_SCHEMA,
-            }
-        },
-    )
+        )
 
-    result = json.loads(response.output_text)
-    sql = result.get("sql", "").strip()
+        result = json.loads(response.output_text)
+        sql = result.get("sql", "").strip()
 
-    if sql:
-        sql = ensure_limit(sql)
-        is_safe, message = validate_select_sql(sql)
-        if not is_safe:
-            return {
-                "sql": "",
-                "explanation": f"The generated SQL was blocked: {message}",
-                "clarification_question": "Please ask a simpler question about the allowed process data columns.",
-                "used_llm": True,
-            }
-        result["sql"] = sql
+        if sql:
+            sql = ensure_limit(sql)
+            is_safe, message = validate_select_sql(sql)
+            if not is_safe:
+                return {
+                    "sql": "",
+                    "explanation": f"The generated SQL was blocked: {message}",
+                    "clarification_question": "Please ask a simpler question about the allowed process data columns.",
+                    "used_llm": True,
+                }
+            result["sql"] = sql
 
-    result["used_llm"] = True
-    return result
+        result["used_llm"] = True
+        return result
+    except Exception as exc:
+        return {
+            "sql": "",
+            "explanation": f"LLM SQL generation failed, so the local fallback was used: {exc}",
+            "clarification_question": "",
+            "used_llm": False,
+        }
 
 
 def build_sql_prompt(question):
     allowed_columns = "\n".join(f"- {column}" for column in sorted(ALLOWED_COLUMNS))
     allowed_tables = "\n".join(f"- {table}" for table in sorted(ALLOWED_TABLES))
+    semantic_layer = build_semantic_layer_prompt()
 
     return f"""
 User question:
 {question}
+
+Semantic layer:
+{semantic_layer}
 
 Database:
 Table name:

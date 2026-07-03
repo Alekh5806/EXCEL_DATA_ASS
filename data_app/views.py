@@ -1,4 +1,5 @@
 from pathlib import Path
+from os import unlink
 from tempfile import NamedTemporaryFile
 
 from django.db.models import Avg, Max, Min
@@ -193,11 +194,19 @@ def upload_excel(request):
     if replace_source:
         ProcessData.objects.filter(source_file=source_file).delete()
 
-    with NamedTemporaryFile(suffix=".xlsx") as temporary_file:
+    with NamedTemporaryFile(suffix=".xlsx", delete=False) as temporary_file:
         for chunk in excel_file.chunks():
             temporary_file.write(chunk)
         temporary_file.flush()
-        result = import_excel_workbook(temporary_file.name, source_file=source_file)
+        temp_file_path = temporary_file.name
+
+    try:
+        result = import_excel_workbook(temp_file_path, source_file=source_file)
+    finally:
+        try:
+            unlink(temp_file_path)
+        except FileNotFoundError:
+            pass
 
     return Response(
         {

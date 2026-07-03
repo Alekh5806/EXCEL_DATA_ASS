@@ -25,36 +25,39 @@ def generate_final_answer(question, sql, data, sql_explanation=""):
     if not os.environ.get("OPENAI_API_KEY"):
         return build_fallback_answer(data)
 
-    client = OpenAI()
-    model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
+    try:
+        client = OpenAI()
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-    response = client.responses.create(
-        model=model,
-        input=[
-            {
-                "role": "developer",
-                "content": (
-                    "You explain database query results in simple language. "
-                    "Use only the SQL result data. Do not invent values."
-                ),
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "developer",
+                    "content": (
+                        "You explain database query results in simple language. "
+                        "Use only the SQL result data. Do not invent values."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": build_answer_prompt(question, sql, data, sql_explanation),
+                },
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "final_answer_response",
+                    "strict": True,
+                    "schema": ANSWER_RESPONSE_SCHEMA,
+                }
             },
-            {
-                "role": "user",
-                "content": build_answer_prompt(question, sql, data, sql_explanation),
-            },
-        ],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "final_answer_response",
-                "strict": True,
-                "schema": ANSWER_RESPONSE_SCHEMA,
-            }
-        },
-    )
+        )
 
-    result = json.loads(response.output_text)
-    return result["answer"]
+        result = json.loads(response.output_text)
+        return result["answer"]
+    except Exception:
+        return build_fallback_answer(data)
 
 
 def build_answer_prompt(question, sql, data, sql_explanation=""):
