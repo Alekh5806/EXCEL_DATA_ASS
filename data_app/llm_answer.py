@@ -1,8 +1,11 @@
 import json
-import os
+import logging
 
-from openai import OpenAI
+from .logging_utils import truncate_for_log
+from .llm_client import create_llm_client, get_llm_model, is_llm_configured, parse_json_content
 
+
+logger = logging.getLogger("data_app.llm_answer")
 
 ANSWER_RESPONSE_SCHEMA = {
     "type": "object",
@@ -22,21 +25,29 @@ ANSWER_RESPONSE_SCHEMA = {
 
 
 def generate_final_answer(question, sql, data, sql_explanation=""):
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not is_llm_configured():
+        logger.warning("final answer generation skipped because no LLM provider is configured")
         return build_fallback_answer(data)
 
     try:
-        client = OpenAI()
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        client = create_llm_client()
+        model = get_llm_model("gpt-4o-mini")
+        logger.info(
+            "final answer generation started model=%s sql=%r row_count=%s",
+            model,
+            sql,
+            len(data or []),
+        )
 
-        response = client.responses.create(
+        response = client.chat.completions.create(
             model=model,
-            input=[
+            messages=[
                 {
-                    "role": "developer",
+                    "role": "system",
                     "content": (
                         "You explain database query results in simple language. "
-                        "Use only the SQL result data. Do not invent values."
+                        "Use only the SQL result data. Do not invent values. "
+                        "Return only raw JSON with keys answer and data_missing."
                     ),
                 },
                 {
@@ -44,19 +55,15 @@ def generate_final_answer(question, sql, data, sql_explanation=""):
                     "content": build_answer_prompt(question, sql, data, sql_explanation),
                 },
             ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "final_answer_response",
-                    "strict": True,
-                    "schema": ANSWER_RESPONSE_SCHEMA,
-                }
-            },
+            response_format={"type": "json_object"},
         )
 
-        result = json.loads(response.output_text)
+        content = response.choices[0].message.content
+        logger.info("final answer raw response=%s", truncate_for_log(content, 1000))
+        result = parse_json_content(content)
         return result["answer"]
     except Exception:
+        logger.exception("final answer generation failed; using deterministic fallback")
         return build_fallback_answer(data)
 
 

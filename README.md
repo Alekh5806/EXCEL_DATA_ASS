@@ -119,3 +119,25 @@ python manage.py test data_app.tests
 - Start with `OPENAI_MODEL=gpt-4o-mini` for lower-cost API usage; your ChatGPT subscription does not automatically provide API quota.
 - If the key is missing, the app falls back to the existing local SQL/heuristic chat path.
 - The frontend API URL is configurable through `VITE_API_BASE_URL`.
+
+## Using Ollama Instead Of OpenAI
+
+You can use Ollama as the LLM provider without an OpenAI API key.
+
+Example local `.env` values:
+
+```env
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=qwen2.5-coder:14b
+OPENAI_API_KEY=
+OPENAI_MODEL=
+```
+
+Then make sure Ollama is running and the model is available:
+
+```powershell
+ollama run qwen2.5-coder:14b
+```
+
+The backend will use the OpenAI-compatible Ollama endpoint for both SQL generation and final answer generation.

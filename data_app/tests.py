@@ -9,6 +9,7 @@ from openpyxl import Workbook
 
 from .importers import import_excel_workbook
 from .llm_answer import build_answer_prompt, build_fallback_answer
+from .langgraph_chat import finalize_node
 from .llm_sql import build_sql_prompt
 from .models import ProcessData
 from .sql_runner import run_safe_select_sql
@@ -136,6 +137,23 @@ class ProcessDataApiTests(TestCase):
         self.assertEqual(summary["row_count"], 2)
         self.assertEqual(summary["product_gas_temperature"]["maximum"], 90)
         self.assertEqual(summary["product_gas_temperature"]["minimum"], 80)
+
+    def test_summary_api_returns_database_backed_overview_metrics(self):
+        response = self.client.get("/api/summary/")
+
+        self.assertEqual(response.status_code, 200)
+        overview = response.json()["overview"]
+        self.assertEqual(overview["total_rows"], 3)
+        self.assertEqual(overview["total_columns"], 16)
+        self.assertEqual(overview["date_range"]["start"], "2025-04-08")
+        self.assertEqual(overview["date_range"]["end"], "2025-04-09")
+        self.assertEqual(overview["latest_source_file"], "sample.xlsx")
+        self.assertEqual(overview["source_file_count"], 1)
+        self.assertEqual(overview["insights"]["highest_biomass_temperature"], None)
+        self.assertEqual(overview["insights"]["avg_reactor_flow"], None)
+        self.assertEqual(overview["insights"]["distinct_stages"], 3)
+        self.assertGreater(overview["insights"]["data_quality_score"], 0)
+        self.assertEqual(len(overview["column_distribution"]), 4)
 
     def test_stats_api_returns_requested_operation(self):
         response = self.client.get(
@@ -482,8 +500,87 @@ class NaturalLanguageToSqlTests(TestCase):
         self.assertTrue(is_safe)
         self.assertEqual(message, "SQL is safe.")
 
+    def test_select_sql_allows_generated_output_aliases(self):
+        sql = (
+            "SELECT MAX(biomass_temperature) AS highest_biomass_temperature "
+            "FROM data_app_processdata WHERE date = '2025-03-17';"
+        )
+
+        is_safe, message = validate_select_sql(sql)
+
+        self.assertTrue(is_safe)
+        self.assertEqual(message, "SQL is safe.")
+
+    def test_select_sql_allows_like_stage_filters(self):
+        sql = (
+            "SELECT MAX(biomass_temperature) AS highest_biomass_temperature "
+            "FROM data_app_processdata WHERE date = '2025-03-17' AND stage LIKE '%STABLE%';"
+        )
+
+        is_safe, message = validate_select_sql(sql)
+
+        self.assertTrue(is_safe)
+        self.assertEqual(message, "SQL is safe.")
+
+    def test_select_sql_allows_ilike_stage_filters(self):
+        sql = (
+            "SELECT MAX(biomass_temperature) AS highest_biomass_temperature "
+            "FROM data_app_processdata WHERE date = '2025-03-17' AND stage ILIKE '%stable%';"
+        )
+
+        is_safe, message = validate_select_sql(sql)
+
+        self.assertTrue(is_safe)
+        self.assertEqual(message, "SQL is safe.")
+
+    def test_select_sql_allows_distinct_order_by_and_offset(self):
+        sql = (
+            "SELECT DISTINCT stage FROM data_app_processdata "
+            "WHERE date = '2025-03-17' ORDER BY stage ASC LIMIT 10 OFFSET 0;"
+        )
+
+        is_safe, message = validate_select_sql(sql)
+
+        self.assertTrue(is_safe)
+        self.assertEqual(message, "SQL is safe.")
+
+    def test_select_sql_allows_common_postgres_functions(self):
+        sql = (
+            "SELECT DATE_TRUNC('hour', timestamp) AS bucket, ROUND(AVG(biomass_temperature), 2) AS avg_temp "
+            "FROM data_app_processdata WHERE stage = 'STABLE' GROUP BY bucket ORDER BY bucket;"
+        )
+
+        is_safe, message = validate_select_sql(sql)
+
+        self.assertTrue(is_safe)
+        self.assertEqual(message, "SQL is safe.")
+
     def test_non_select_sql_is_blocked(self):
         is_safe, message = validate_select_sql("DROP TABLE data_app_processdata;")
+
+        self.assertFalse(is_safe)
+        self.assertEqual(message, "Only SELECT queries are allowed.")
+
+    def test_insert_sql_is_blocked(self):
+        is_safe, message = validate_select_sql(
+            "INSERT INTO data_app_processdata (stage) VALUES ('STABLE');"
+        )
+
+        self.assertFalse(is_safe)
+        self.assertEqual(message, "Only SELECT queries are allowed.")
+
+    def test_update_sql_is_blocked(self):
+        is_safe, message = validate_select_sql(
+            "UPDATE data_app_processdata SET stage = 'STABLE' WHERE id = 1;"
+        )
+
+        self.assertFalse(is_safe)
+        self.assertEqual(message, "Only SELECT queries are allowed.")
+
+    def test_delete_sql_is_blocked(self):
+        is_safe, message = validate_select_sql(
+            "DELETE FROM data_app_processdata WHERE id = 1;"
+        )
 
         self.assertFalse(is_safe)
         self.assertEqual(message, "Only SELECT queries are allowed.")
@@ -507,6 +604,42 @@ class NaturalLanguageToSqlTests(TestCase):
         self.assertIn("product_gas_temperature", prompt)
         self.assertIn("One row represents a process measurement captured at a specific timestamp.", prompt)
         self.assertIn("Question mapping hints", prompt)
+        self.assertIn("Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, REPLACE, ATTACH, DETACH, PRAGMA, or VACUUM.", prompt)
+
+    def test_prompt_uses_explicit_user_year_without_second_guessing(self):
+        prompt = build_sql_prompt("What was the highest biomass temperature on March 17 2025?")
+
+        self.assertIn("If the user provides an explicit date or year, use it exactly in the SQL.", prompt)
+        self.assertIn("Do not question or override the user's year", prompt)
+        self.assertIn("It is acceptable to generate SQL that returns zero rows", prompt)
+
+    def test_prompt_describes_stage_as_categorical_literal_values(self):
+        prompt = build_sql_prompt("What was the highest biomass temperature during stable stage?")
+
+        self.assertIn("Treat this as a categorical text field", prompt)
+        self.assertIn("Sample values: HEAT UP, RAMP UP, STABLE", prompt)
+        self.assertIn("filter with stage = '<VALUE>'", prompt)
+
+
+class LangGraphFinalizeTests(TestCase):
+    def test_finalize_returns_fallback_when_llm_returns_empty_sql_and_no_message(self):
+        state = {
+            "question": "What was the highest temperature product_gas_temperature on April 8 2025",
+            "llm_result": {
+                "used_llm": True,
+                "sql": "",
+                "explanation": "",
+                "clarification_question": "",
+            },
+            "sql_result": {"ok": False, "data": [], "sql": "", "error": ""},
+        }
+
+        response = finalize_node(state)["response"]
+
+        self.assertEqual(response["sql"], "")
+        self.assertEqual(response["data"], [])
+        self.assertTrue(response["answer"])
+        self.assertIn("I could not generate SQL", response["answer"])
 
 
 class SafeSqlRunnerTests(TestCase):

@@ -12,6 +12,20 @@ PROCESS_DATA_SEMANTIC_LAYER = {
         "abnormal or outlier detection",
         "daily summary for a given date",
     ],
+    "forbidden_operations": [
+        "ALTER",
+        "ATTACH",
+        "CREATE",
+        "DELETE",
+        "DETACH",
+        "DROP",
+        "INSERT",
+        "PRAGMA",
+        "REPLACE",
+        "TRUNCATE",
+        "UPDATE",
+        "VACUUM",
+    ],
     "columns": {
         "timestamp": {
             "description": "Full timestamp of the measurement record.",
@@ -62,8 +76,13 @@ PROCESS_DATA_SEMANTIC_LAYER = {
             "synonyms": ["return temperature", "heat carrier return temp"],
         },
         "stage": {
-            "description": "Process stage label imported from the spreadsheet.",
-            "synonyms": ["phase"],
+            "description": "Process stage label imported from the spreadsheet. Treat this as a categorical text field, not a numeric stability range.",
+            "synonyms": ["phase", "state", "operating stage"],
+            "sample_values": ["HEAT UP", "RAMP UP", "STABLE"],
+            "filter_guidance": (
+                "When the user mentions a stage such as STABLE, HEAT UP, or RAMP UP, "
+                "filter with stage = '<VALUE>' or a case-insensitive text comparison against the literal stage value."
+            ),
         },
         "notes": {
             "description": "Free-text process notes imported from the spreadsheet.",
@@ -89,6 +108,11 @@ PROCESS_DATA_SEMANTIC_LAYER = {
             "column": "pygas_flow_rate",
             "reason": "Default flow metric for generic flow questions.",
         },
+        {
+            "phrases": ["stable", "heat up", "ramp up", "stage", "phase"],
+            "column": "stage",
+            "reason": "These phrases refer to literal categorical values in the stage column.",
+        },
     ],
 }
 
@@ -102,12 +126,26 @@ def build_semantic_layer_prompt():
     for item in PROCESS_DATA_SEMANTIC_LAYER["common_questions"]:
         lines.append(f"- {item}")
 
+    lines.append("SQL guardrails:")
+    lines.append("- Generate read-only SQL only.")
+    lines.append("- Never generate INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, REPLACE, ATTACH, DETACH, PRAGMA, or VACUUM.")
+    lines.append(
+        "- Forbidden operations list: "
+        + ", ".join(PROCESS_DATA_SEMANTIC_LAYER["forbidden_operations"])
+    )
+
     lines.append("Column meanings:")
     for column_name, column_info in PROCESS_DATA_SEMANTIC_LAYER["columns"].items():
         synonyms = ", ".join(column_info.get("synonyms", []))
         lines.append(f"- {column_name}: {column_info['description']}")
         if synonyms:
             lines.append(f"  Synonyms: {synonyms}")
+        sample_values = ", ".join(column_info.get("sample_values", []))
+        if sample_values:
+            lines.append(f"  Sample values: {sample_values}")
+        filter_guidance = column_info.get("filter_guidance", "")
+        if filter_guidance:
+            lines.append(f"  Filter guidance: {filter_guidance}")
 
     lines.append("Question mapping hints:")
     for mapping in PROCESS_DATA_SEMANTIC_LAYER["question_to_columns"]:

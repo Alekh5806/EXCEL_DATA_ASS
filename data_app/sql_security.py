@@ -25,7 +25,21 @@ ALLOWED_COLUMNS = {
     "imported_at",
 }
 
-ALLOWED_FUNCTIONS = {"max", "min", "avg", "count", "sum", "date", "time"}
+ALLOWED_FUNCTIONS = {
+    "avg",
+    "coalesce",
+    "count",
+    "date",
+    "date_trunc",
+    "extract",
+    "lower",
+    "max",
+    "min",
+    "round",
+    "sum",
+    "time",
+    "upper",
+}
 
 ALLOWED_OUTPUT_ALIASES = {
     "average",
@@ -51,6 +65,47 @@ FORBIDDEN_KEYWORDS = {
     "vacuum",
 }
 
+SQL_KEYWORDS = {
+    "all",
+    "and",
+    "any",
+    "as",
+    "asc",
+    "between",
+    "by",
+    "case",
+    "desc",
+    "distinct",
+    "else",
+    "end",
+    "exists",
+    "false",
+    "from",
+    "group",
+    "having",
+    "ilike",
+    "in",
+    "inner",
+    "is",
+    "join",
+    "left",
+    "like",
+    "limit",
+    "not",
+    "null",
+    "offset",
+    "on",
+    "or",
+    "order",
+    "outer",
+    "right",
+    "select",
+    "then",
+    "true",
+    "when",
+    "where",
+}
+
 
 def validate_select_sql(sql):
     if not sql or not isinstance(sql, str):
@@ -67,7 +122,8 @@ def validate_select_sql(sql):
         return False, "Only SELECT queries are allowed."
 
     lowered = clean_sql.lower()
-    if any(re.search(rf"\b{keyword}\b", lowered) for keyword in FORBIDDEN_KEYWORDS):
+    lowered_without_strings = strip_sql_strings(lowered)
+    if any(re.search(rf"\b{keyword}\b", lowered_without_strings) for keyword in FORBIDDEN_KEYWORDS):
         return False, "Dangerous SQL keyword detected."
 
     if ";" in clean_sql[:-1]:
@@ -81,12 +137,14 @@ def validate_select_sql(sql):
         return False, "Query uses a table that is not allowed."
 
     identifiers = extract_identifiers(lowered)
+    output_aliases = extract_output_aliases(lowered)
     unknown_identifiers = (
         identifiers
         - ALLOWED_COLUMNS
         - ALLOWED_TABLES
         - ALLOWED_FUNCTIONS
         - ALLOWED_OUTPUT_ALIASES
+        - output_aliases
     )
     if unknown_identifiers:
         return False, f"Unknown column or function: {', '.join(sorted(unknown_identifiers))}."
@@ -113,26 +171,15 @@ def extract_table_names(lowered_sql):
 
 
 def extract_identifiers(lowered_sql):
-    without_strings = re.sub(r"'[^']*'|\"[^\"]*\"", " ", lowered_sql)
+    without_strings = strip_sql_strings(lowered_sql)
     words = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", without_strings))
-    sql_words = {
-        "as",
-        "asc",
-        "and",
-        "between",
-        "by",
-        "desc",
-        "from",
-        "group",
-        "having",
-        "in",
-        "is",
-        "limit",
-        "not",
-        "null",
-        "or",
-        "order",
-        "select",
-        "where",
-    }
-    return words - sql_words
+    return words - SQL_KEYWORDS
+
+
+def extract_output_aliases(lowered_sql):
+    without_strings = strip_sql_strings(lowered_sql)
+    return set(re.findall(r"\bas\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", without_strings))
+
+
+def strip_sql_strings(sql):
+    return re.sub(r"'[^']*'|\"[^\"]*\"", " ", sql)
